@@ -116,15 +116,23 @@ jobs:
                   '|---|---|---|---|---|'
                 ];
               }
-
-              const rows = tableLines.slice(2);
+            
+              const rows = tableLines.slice(2); // 跳过表头和分隔行
               const map = new Map();
               for (const r of rows) {
-                if (!r.startsWith('|')) continue;
-                const cols = r.split('|').map(s => s.trim()).filter(Boolean);
-                // cols: [Date, Sleep, Wake, Duration, Source]
-                if (cols.length < 5) continue;
-                map.set(cols[0], { sleep: cols[1], wake: cols[2], duration: cols[3], source: cols[4] });
+                if (! r.startsWith('|')) continue;
+                const parts = r.split('|').map(s => s.trim());
+                // Markdown 表格行格式：'| col1 | col2 | col3 | col4 | col5 |'
+                // split 后：['', 'col1', 'col2', 'col3', 'col4', 'col5', '']
+                if (parts.length < 6) continue; // 至少要 7 个元素（首尾空 + 5 列）
+                const date = parts[1];
+                const sleep = parts[2] || '';
+                const wake = parts[3] || '';
+                const duration = parts[4] || '';
+                const source = parts[5] || '';
+                if (date) { // Date 列不能为空
+                  map.set(date, { sleep, wake, duration, source });
+                }
               }
               return map;
             }
