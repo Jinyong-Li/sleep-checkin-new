@@ -40,8 +40,10 @@
 <!-- LEADERBOARD_START -->
 ## 昨日榜单（2026-01-06）
 > 仅统计 open 的 `sleep-log` issue 用户；只统计完整记录（Sleep/Wake/Duration 都存在）；cutoff=04:00 (UTC+8)。
+- 最早睡：暂无
 - 最晚睡：暂无
 - 最早起：暂无
+- 最晚起：暂无
 - 睡得最长：暂无
 - 睡得最短：暂无
 完整榜单见：https://jinyong-li.github.io/sleep-checkin/
