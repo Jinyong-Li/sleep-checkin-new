@@ -14,6 +14,7 @@ assignees: ''
 - `/wake` - 记录当前时间为起床时间
 - `/sleep YYYY-MM-DD HH:MM backfill` - 补记/修正（仅最近7天，且只能改更晚，且不能填写未来时间）
 - `/wake YYYY-MM-DD HH:MM backfill` - 补记/修正（仅最近7天，且只能改更晚，且不能填写未来时间）
+- `/undo` - 撤销最近一次 sleep/wake 记录（仅限最近10分钟内）
 - `/rebuild` - 从事件日志重建表格（当你手动改坏表格或怀疑显示不对时使用）
 
 > 创建后在评论区发送 `/sleep` 或 `/rebuild` 会自动启用 sleep-log（机器人会自动加 `sleep-log` 标签）。
