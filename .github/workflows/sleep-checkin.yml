@@ -357,7 +357,10 @@ jobs:
                 issue_number,
                 `@${commenter} ⚠️ 为了避免记录分散，你只能拥有 **一个** 处于 open 状态的 sleep-log issue。\n` +
                   `请到这个 issue 继续记录：${otherUrl}\n\n` +
-                  `（你可以关闭当前这个 issue，或删除它重新使用模板创建。）`
+                  `接下来你可以：\n` +
+                  `1) 关闭当前这个 issue；\n` +
+                  `2) 到上面链接的 issue 里继续记录；\n` +
+                  `3) 如果那个 issue 被误关了，reopen 后即可继续使用。`
               );
               return false;
             };
