@@ -7,7 +7,7 @@
     <link rel="manifest" href="./manifest.webmanifest" />
     <meta name="theme-color" content="#111827" />
     <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; margin: 0; background:#0b1020; color:#e5e7eb; }
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; margin: 0; background:#0b1020; co[...]
       header { padding: 16px; background:#111827; position: sticky; top: 0; }
       main { padding: 16px; max-width: 900px; margin: 0 auto; }
       .card { background:#111827; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; margin: 12px 0; }
@@ -115,6 +115,17 @@
         $("authState").textContent = text;
       }
 
+      // Format ISO time to Beijing time (UTC+8) for display
+      function formatBeijing(iso) {
+        // If iso missing or invalid, fall back to original value
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return String(iso || "");
+        return d.toLocaleString("zh-CN", {
+          timeZone: "Asia/Shanghai",
+          hour12: false,
+        });
+      }
+
       async function api(path, opts = {}) {
         const res = await fetch(workerBase + path, {
           ...opts,
@@ -178,11 +189,13 @@
         $("tableCard").style.display = "block";
 
         $("commentsMeta").textContent = `${data.comments.length} comments (showing latest 20)`;
-        $("commentsPre").textContent = data.comments.map(c => {
-          const who = c.user_login;
-          const at = c.created_at;
-          return `[${at}] ${who}:\n${c.body}\n\n---\n`;
-        }).join("\n");
+        $("commentsPre").textContent = data.comments
+          .map((c) => {
+            const who = c.user_login;
+            const at = formatBeijing(c.created_at);
+            return `[${at}] ${who}:\n${c.body}\n\n---\n`;
+          })
+          .join("\n");
 
         $("bodyPre").textContent = data.issue_body || "";
       }
