@@ -7,16 +7,12 @@
 ---
 
 ## PWA 快速入口（推荐）
-如果你不想每次都进 GitHub Issues 手动找 issue，可以直接使用这个网页 App（支持“添加到主屏幕/桌面”，体验接近原生 App）：
-
-- **Sleep Check-in App（GitHub Pages）**：https://jinyong-li.github.io/sleep-checkin/
+- Sleep Check-in App（GitHub Pages）：https://jinyong-li.github.io/sleep-checkin/
 
 首次使用流程：
 1. 打开上面的链接，点击 **Login with GitHub**
-2. 如果你还没有 Sleep Log Issue，页面会提供 **Create Issue** 按钮一键创建（并自动 `/rebuild` 启用）
-3. 之后即可在 App 里一键发送 `/sleep` `/wake` `/undo` `/archive` `/rebuild` 以及 backfill 命令，并查看最新评论与表格
-
-> 如果你更换了 Worker 地址（维护者才会遇到），可在页面的「高级设置」里查看当前 Worker Base URL（由 `docs/config.js` 配置）。
+2. 如果你还没有 Sleep Log Issue，页面会提供 **Create Issue** 一键创建（并自动 `/rebuild` 启用）
+3. 之后即可在 App 里一键发送命令，并查看 bot 回复与表格
 
 ---
 
@@ -38,6 +34,16 @@
 1. 打开：https://jinyong-li.github.io/sleep-checkin/
 2. 地址栏右侧出现 **安装**图标（Install）
 3. 点击安装后会以独立窗口运行（桌面 App）
+
+---
+
+<!-- LEADERBOARD_START -->
+## 昨日榜单（待生成）
+
+> 每天北京时间 04:05 自动生成（cutoff=04:00 UTC+8）。首次生成前这里会显示占位内容。
+
+完整榜单见：https://jinyong-li.github.io/sleep-checkin/
+<!-- LEADERBOARD_END -->
 
 ---
 
@@ -68,7 +74,7 @@
 
 ### 方式 B：纯 GitHub Issue
 1. 在仓库 **Issues** 使用模板创建你的 Sleep Log Issue（模板内含启用标记）
-2. 在该 Issue 下评论命令开始打卡（首次会自动启用并添加 `sleep-log` 标签）
+2. 在该 Issue 下评论命���开始打卡（首次会自动启用并添加 `sleep-log` 标签）
 
 ---
 
@@ -111,8 +117,10 @@
 ---
 
 ## 关于通知（邮件太多怎么办）
-这个项目会由 `github-actions[bot]` 在你的 Issue 下追加评论（事件日志），如果你订阅了该 issue 或 watch 了仓库，可能会收到很多邮件通知。
+这个项目会由 `github-actions[bot]` 在你的 Issue 下追加评论（事件日志），如果你订阅了该 issue 或 watch 了仓库，可能会收到很多通知。
 
-建议：
-- 在仓库右上角 **Watch** 选择 `Participating and @mentions` 或 `Ignore`
-- 在 GitHub 的 **Settings → Notifications** 里关闭“自动订阅我参与的对话”的选项（避免每条 bot 评论都给你发邮件）
+建议（直达链接）：
+- 仓库 Watch 设置（右上角 Watch）：https://github.com/Jinyong-Li/sleep-checkin  
+  - 推荐选择 `Participating and @mentions` 或 `Ignore`
+- GitHub 全局通知设置页：https://github.com/settings/notifications  
+  - 可以关闭“自动订阅我参与的对话”（避免每条 bot 评论都给你发通知）
