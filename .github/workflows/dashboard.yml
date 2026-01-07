@@ -1,0 +1,189 @@
+name: Dashboard
+
+on:
+  schedule:
+    - cron: "15 * * * *" # 每小时第15分钟（UTC）跑一次；可按需调整
+  workflow_dispatch: {}
+
+permissions:
+  issues: read
+  contents: write
+
+concurrency:
+  group: dashboard
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate docs/dashboard.md
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const REQUIRED_LABEL = 'sleep-log';
+            const DAYS_AVG = 7;
+
+            const pad = (n) => String(n).padStart(2, '0');
+
+            function toUtc8Date(dateUtcIso) {
+              const dt = new Date(dateUtcIso);
+              return new Date(dt.getTime() + 8 * 60 * 60 * 1000);
+            }
+            function fmtUtc8DateKey(dUtc8) {
+              const yyyy = dUtc8.getUTCFullYear();
+              const mm = pad(dUtc8.getUTCMonth() + 1);
+              const dd = pad(dUtc8.getUTCDate());
+              return `${yyyy}-${mm}-${dd}`;
+            }
+            function addDaysToUtc8DateKey(dateKey, deltaDays) {
+              const m = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+              if (!m) return null;
+              const [_, Y, M, D] = m;
+              const utcMs = Date.UTC(Number(Y), Number(M) - 1, Number(D), -8, 0, 0);
+              const newUtcMs = utcMs + deltaDays * 24 * 60 * 60 * 1000;
+              const newUtc8 = new Date(newUtcMs + 8 * 60 * 60 * 1000);
+              return fmtUtc8DateKey(newUtc8);
+            }
+
+            function parseDurationToMinutes(d) {
+              // "7h05m"
+              const m = (d || '').match(/^(\d+)h(\d{2})m$/);
+              if (!m) return null;
+              return Number(m[1]) * 60 + Number(m[2]);
+            }
+
+            function extractTableRows(issueBody) {
+              const startMark = '<!-- SLEEP_LOG_TABLE_START -->';
+              const endMark = '<!-- SLEEP_LOG_TABLE_END -->';
+              if (!issueBody || !issueBody.includes(startMark) || !issueBody.includes(endMark)) return [];
+
+              const startIdx = issueBody.indexOf(startMark);
+              const endIdx = issueBody.indexOf(endMark);
+              const middle = issueBody.slice(startIdx + startMark.length, endIdx);
+
+              const lines = middle.split('\n').map(l => l.trim()).filter(Boolean);
+              const headerIdx = lines.findIndex(l => l.startsWith('| Date |'));
+              if (headerIdx < 0) return [];
+              const table = lines.slice(headerIdx);
+
+              const rows = table.slice(2);
+              const parsed = [];
+              for (const r of rows) {
+                if (!r.startsWith('|')) continue;
+                const cols = r.split('|').map(s => s.trim()).filter(Boolean);
+                // [Date, Sleep, Wake, Duration, Source]
+                if (cols.length < 5) continue;
+                parsed.push({
+                  date: cols[0],
+                  sleep: cols[1],
+                  wake: cols[2],
+                  duration: cols[3],
+                  source: cols[4],
+                });
+              }
+              return parsed;
+            }
+
+            const nowUtc8 = toUtc8Date(new Date().toISOString());
+            const todayKey = fmtUtc8DateKey(nowUtc8);
+            const minKey = addDaysToUtc8DateKey(todayKey, -(DAYS_AVG - 1));
+
+            // Pull all open issues with label sleep-log
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: REQUIRED_LABEL,
+              per_page: 100,
+            });
+
+            const people = issues.map(is => {
+              const author = is.user?.login || 'unknown';
+              return {
+                author,
+                issue_number: is.number,
+                issue_title: is.title,
+                issue_url: is.html_url,
+                rows: extractTableRows(is.body || ''),
+              };
+            }).sort((a, b) => a.author.localeCompare(b.author));
+
+            // Today table (by dateKey)
+            const todayRecords = people.map(p => {
+              const row = p.rows.find(r => r.date === todayKey) || { sleep: '', wake: '', duration: '', source: '' };
+              return {
+                user: p.author,
+                sleep: row.sleep || '',
+                wake: row.wake || '',
+                duration: row.duration || '',
+                source: row.source || '',
+                issue: p.issue_url,
+              };
+            });
+
+            // 7-day averages
+            const averages = people.map(p => {
+              const mins = [];
+              for (const r of p.rows) {
+                if (!r.date || !minKey) continue;
+                if (r.date < minKey || r.date > todayKey) continue;
+                const m = parseDurationToMinutes(r.duration);
+                if (m != null) mins.push(m);
+              }
+              const avgMin = mins.length ? Math.round(mins.reduce((x, y) => x + y, 0) / mins.length) : null;
+              const avg = avgMin == null ? '' : `${Math.floor(avgMin / 60)}h${pad(avgMin % 60)}m`;
+              return {
+                user: p.author,
+                avg,
+                days_counted: mins.length,
+                issue: p.issue_url,
+              };
+            });
+
+            const lines = [];
+            lines.push(`# Sleep Check-in Dashboard`);
+            lines.push('');
+            lines.push(`Updated: ${new Date().toISOString()}`);
+            lines.push('');
+            lines.push(`- "Today" uses the table's **Date (sleep dateKey)**.`);
+            lines.push(`- "Avg" is computed from rows with a valid \`Duration\` in the last ${DAYS_AVG} days (${minKey} ~ ${todayKey}).`);
+            lines.push('');
+
+            lines.push(`## Today (${todayKey})`);
+            lines.push('');
+            lines.push(`| User | Sleep (UTC+8) | Wake (UTC+8) | Duration | Source | Issue |`);
+            lines.push(`|---|---|---|---|---|---|`);
+            for (const r of todayRecords) {
+              lines.push(`| @${r.user} | ${r.sleep} | ${r.wake} | ${r.duration} | ${r.source} | ${r.issue} |`);
+            }
+            lines.push('');
+
+            lines.push(`## Average sleep duration (last ${DAYS_AVG} days)`);
+            lines.push('');
+            lines.push(`| User | Avg Duration | Days Counted | Issue |`);
+            lines.push(`|---|---:|---:|---|`);
+            for (const a of averages.sort((x, y) => x.user.localeCompare(y.user))) {
+              lines.push(`| @${a.user} | ${a.avg} | ${a.days_counted} | ${a.issue} |`);
+            }
+            lines.push('');
+
+            fs.mkdirSync('docs', { recursive: true });
+            fs.writeFileSync('docs/dashboard.md', lines.join('\n'), 'utf8');
+
+      - name: Commit and push dashboard
+        run: |
+          if git diff --quiet; then
+            echo "No changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/dashboard.md
+          git commit -m "Update dashboard"
+          git push
