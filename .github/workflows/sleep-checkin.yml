@@ -35,6 +35,11 @@ jobs:
             // Title format
             const TITLE_PREFIX = '[Sleep Log]';
 
+            // Anti-tamper: only trust events emitted by github-actions[bot]
+            const TRUSTED_EVENT_AUTHOR = 'github-actions[bot]';
+            const EVENT_PREFIX = '<!--SLEEP_LOG_EVENT ';
+            const EVENT_SUFFIX = '-->';
+
             // ----------------------------
             // Helpers
             // ----------------------------
@@ -114,44 +119,6 @@ jobs:
               return { before, middle, after };
             }
 
-            function parseTableToMap(middle) {
-              // returns Map<dateKey, {sleep,wake,duration,source}>
-              const lines = middle.split('\n').map((l) => l.trimEnd());
-              const headerIdx = lines.findIndex((l) => l.startsWith('| Date |'));
-
-              let tableLines = [];
-              if (headerIdx >= 0) {
-                tableLines = lines.slice(headerIdx).filter((l) => l.trim() !== '');
-              } else {
-                tableLines = [
-                  '| Date | Sleep (UTC+8) | Wake (UTC+8) | Duration | Source |',
-                  '|---|---|---|---|---|',
-                ];
-              }
-
-              const rows = tableLines.slice(2); // 跳过表头和分隔行
-              const map = new Map();
-
-              for (const r of rows) {
-                if (!r.startsWith('|')) continue;
-
-                const parts = r.split('|').map((s) => s.trim());
-                if (parts.length < 6) continue;
-
-                const date = parts[1];
-                const sleep = parts[2] || '';
-                const wake = parts[3] || '';
-                const duration = parts[4] || '';
-                const source = parts[5] || '';
-
-                if (date) {
-                  map.set(date, { sleep, wake, duration, source });
-                }
-              }
-
-              return map;
-            }
-
             function rebuildMiddleFromMap(map) {
               const keys = Array.from(map.keys()).sort((a, b) => (a < b ? 1 : -1)); // desc
               const out = [
@@ -199,8 +166,14 @@ jobs:
               // /wake
               // /sleep YYYY-MM-DD HH:MM backfill
               // /wake  YYYY-MM-DD HH:MM backfill
+              // /rebuild
               const parts = (text || '').trim().split(/\s+/).filter(Boolean);
               const cmd = (parts[0] || '').toLowerCase();
+
+              if (cmd === '/rebuild') {
+                return { cmd };
+              }
+
               if (cmd !== '/sleep' && cmd !== '/wake') return null;
 
               let explicitDate = null;
@@ -226,8 +199,94 @@ jobs:
               return { cmd, explicitDate, explicitTime, isBackfill };
             }
 
+            function parseEventFromCommentBody(body) {
+              if (!body) return null;
+              const start = body.indexOf(EVENT_PREFIX);
+              if (start < 0) return null;
+
+              const jsonStart = start + EVENT_PREFIX.length;
+              const end = body.indexOf(EVENT_SUFFIX, jsonStart);
+              if (end < 0) return null;
+
+              const jsonText = body.slice(jsonStart, end).trim();
+              try {
+                const evt = JSON.parse(jsonText);
+                if (!evt || typeof evt !== 'object') return null;
+                if (!evt.cmd || !evt.stamp || !evt.dateKey) return null;
+                if (evt.cmd !== 'sleep' && evt.cmd !== 'wake') return null;
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(evt.dateKey)) return null;
+                if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(evt.stamp)) return null;
+                evt.source = evt.source || 'live';
+                return evt;
+              } catch {
+                return null;
+              }
+            }
+
             async function comment(owner, repo, issue_number, body) {
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+            function buildEventCommentLine(evt) {
+              // one visible line + one hidden line
+              const action = evt.cmd === 'sleep' ? 'Sleep' : 'Wake';
+              const extra = evt.source === 'backfill' ? ' (backfill)' : '';
+              return (
+                `Recorded **${action}**${extra}: **${evt.stamp} (UTC+8)**\n` +
+                `${EVENT_PREFIX}${JSON.stringify(evt)} ${EVENT_SUFFIX}`
+              );
+            }
+
+            async function listAllComments(owner, repo, issue_number) {
+              const per_page = 100;
+              let page = 1;
+              const all = [];
+
+              while (true) {
+                const res = await github.rest.issues.listComments({
+                  owner,
+                  repo,
+                  issue_number,
+                  per_page,
+                  page,
+                });
+
+                const items = res.data || [];
+                all.push(...items);
+
+                if (items.length < per_page) break;
+                page += 1;
+              }
+
+              return all;
+            }
+
+            async function buildMapFromTrustedEvents(owner, repo, issue_number) {
+              const comments = await listAllComments(owner, repo, issue_number);
+              const events = [];
+
+              for (const c of comments) {
+                const author = c.user?.login;
+                if (author !== TRUSTED_EVENT_AUTHOR) continue;
+                const evt = parseEventFromCommentBody(c.body || '');
+                if (evt) events.push(evt);
+              }
+
+              // Reduce to dateKey map. Rule: never earlier (keep latest stamp lexicographically)
+              const map = new Map();
+              for (const evt of events) {
+                const e = map.get(evt.dateKey) || { sleep: '', wake: '', duration: '', source: '' };
+                if (evt.cmd === 'sleep') {
+                  if (!e.sleep || evt.stamp >= e.sleep) e.sleep = evt.stamp;
+                } else {
+                  if (!e.wake || evt.stamp >= e.wake) e.wake = evt.stamp;
+                }
+                if (e.source !== 'backfill') e.source = evt.source || 'live';
+                computeDuration(e);
+                map.set(evt.dateKey, e);
+              }
+
+              return map;
             }
 
             // Strategy B core rule:
@@ -276,12 +335,10 @@ jobs:
               .filter(Boolean);
 
             if (!labels.includes(REQUIRED_LABEL)) {
-              // Check if issue body has the enable marker
               const issueBody = issue.body || '';
               const hasMarker = issueBody.includes('<!-- SLEEP_LOG_ENABLED -->');
 
               if (hasMarker) {
-                // Auto-add label
                 await github.rest.issues.addLabels({
                   owner,
                   repo,
@@ -296,15 +353,36 @@ jobs:
               }
             }
 
+            // Always rebuild table from trusted events (anti-tamper)
+            const applyRebuild = async () => {
+              const map = await buildMapFromTrustedEvents(owner, repo, issue_number);
+
+              const { body: ensuredBody, startMark, endMark } = ensureTableBlock(issue.body || '');
+              const { before, after } = extractTable(ensuredBody, startMark, endMark);
+              const rebuiltMiddle = rebuildMiddleFromMap(map);
+              const finalBody = before + rebuiltMiddle + after;
+
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number,
+                body: finalBody,
+              });
+            };
+
+            if (parsed.cmd === '/rebuild') {
+              await applyRebuild();
+              await comment(owner, repo, issue_number, `@${commenter} ✅ 已从事件日志重建表格。`);
+              return;
+            }
+
             // Event time (UTC+8)
             const eventUtc8 = toUtc8Date(context.payload.comment.created_at);
             const eventStamp = fmtUtc8Stamp(eventUtc8);
             const eventDateKey = fmtUtc8DateKey(eventUtc8);
 
-            // Determine base table
-            const { body: ensuredBody, startMark, endMark } = ensureTableBlock(issue.body || '');
-            const { before, middle, after } = extractTable(ensuredBody, startMark, endMark);
-            const map = parseTableToMap(middle);
+            // Build current state from trusted events (NOT from issue body)
+            const map = await buildMapFromTrustedEvents(owner, repo, issue_number);
 
             // Find latest incomplete sleep row (Sleep set, Wake empty), newest date first
             const findLatestIncompleteDateKey = () => {
@@ -327,12 +405,10 @@ jobs:
                 appliedDateKey = dateKeyForSleepEvent(eventUtc8);
                 targetStamp = eventStamp; // real time
               } else {
-                // /wake: prefer incomplete row; stamp = real time
                 appliedDateKey = findLatestIncompleteDateKey() || eventDateKey;
-                targetStamp = eventStamp; // KEEP REAL DATE (important!)
+                targetStamp = eventStamp;
               }
             } else if (parsed.explicitTime && !parsed.explicitDate) {
-              // Disallow "/sleep HH:MM" and "/wake HH:MM"
               await comment(
                 owner,
                 repo,
@@ -344,8 +420,6 @@ jobs:
               );
               return;
             } else if (parsed.explicitDate && parsed.explicitTime) {
-              // /sleep YYYY-MM-DD HH:MM backfill
-              // /wake  YYYY-MM-DD HH:MM backfill
               if (!parsed.isBackfill) {
                 await comment(
                   owner,
@@ -410,7 +484,7 @@ jobs:
 
             // Handle /sleep
             if (parsed.cmd === '/sleep') {
-              // 防止 backfill 导致 sleep >= wake
+              // Prevent sleep >= wake
               if (entry.wake && targetStamp >= entry.wake) {
                 await comment(
                   owner,
@@ -422,7 +496,6 @@ jobs:
                 return;
               }
 
-              // Strategy B: never earlier
               if (!canSetField(entry.sleep, targetStamp, source === 'backfill', eventStamp)) {
                 await comment(
                   owner,
@@ -436,19 +509,18 @@ jobs:
               entry.sleep = targetStamp;
             } else {
               // Handle /wake
-              // 防止 backfill 导致 wake <= sleep
+              // Prevent wake <= sleep
               if (entry.sleep && targetStamp <= entry.sleep) {
                 await comment(
                   owner,
                   repo,
                   issue_number,
-                  `@${commenter} ❌ 不能把 **Wake** 设为 **${targetStamp}**，因为它晚于或等于已记录的 **Sleep**（**${entry.sleep}**）。\n` +
+                  `@${commenter} ❌ 不能把 **Wake** 设为 **${targetStamp}**，因为它早于或等于已记录的 **Sleep**（**${entry.sleep}**）。\n` +
                     `💡 如需修正，请先用 backfill 修正 Sleep，或检查时间。`
                 );
                 return;
               }
 
-              // Strategy B: never earlier
               if (!canSetField(entry.wake, targetStamp, source === 'backfill', eventStamp)) {
                 await comment(
                   owner,
@@ -470,16 +542,17 @@ jobs:
             computeDuration(entry);
             map.set(appliedDateKey, entry);
 
-            // Update issue body
-            const rebuiltMiddle = rebuildMiddleFromMap(map);
-            const finalBody = before + rebuiltMiddle + after;
+            // Write trusted event log comment (anti-tamper source of truth)
+            const evt = {
+              cmd: parsed.cmd === '/sleep' ? 'sleep' : 'wake',
+              stamp: targetStamp,
+              dateKey: appliedDateKey,
+              source,
+            };
+            await comment(owner, repo, issue_number, buildEventCommentLine(evt));
 
-            await github.rest.issues.update({
-              owner,
-              repo,
-              issue_number,
-              body: finalBody,
-            });
+            // Apply rebuild from trusted events (which now includes this event)
+            await applyRebuild();
 
             // Add BACKFILL_LABEL on issue if any backfill happened (best-effort)
             if (source === 'backfill') {
@@ -491,8 +564,3 @@ jobs:
                 labels: newLabels,
               });
             }
-
-            // Receipt comment
-            const action = parsed.cmd === '/sleep' ? 'Sleep' : 'Wake';
-            const extra = source === 'backfill' ? ' (backfill)' : '';
-            await comment(owner, repo, issue_number, `Recorded **${action}**${extra}: **${targetStamp} (UTC+8)**`);
