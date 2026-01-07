@@ -29,65 +29,128 @@ jobs:
             const REQUIRED_LABEL = 'sleep-log';
             const DAYS_AVG = 7;
 
+            // Trust only bot event logs
+            const TRUSTED_EVENT_AUTHOR = 'github-actions[bot]';
+            const EVENT_PREFIX = '<!--SLEEP_LOG_EVENT ';
+            const EVENT_SUFFIX = '-->';
+
             const pad = (n) => String(n).padStart(2, '0');
 
             function toUtc8Date(dateUtcIso) {
               const dt = new Date(dateUtcIso);
               return new Date(dt.getTime() + 8 * 60 * 60 * 1000);
             }
+
             function fmtUtc8DateKey(dUtc8) {
               const yyyy = dUtc8.getUTCFullYear();
               const mm = pad(dUtc8.getUTCMonth() + 1);
               const dd = pad(dUtc8.getUTCDate());
               return `${yyyy}-${mm}-${dd}`;
             }
+
             function addDaysToUtc8DateKey(dateKey, deltaDays) {
               const m = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
               if (!m) return null;
-              const [_, Y, M, D] = m;
+              const [, Y, M, D] = m;
               const utcMs = Date.UTC(Number(Y), Number(M) - 1, Number(D), -8, 0, 0);
               const newUtcMs = utcMs + deltaDays * 24 * 60 * 60 * 1000;
               const newUtc8 = new Date(newUtcMs + 8 * 60 * 60 * 1000);
               return fmtUtc8DateKey(newUtc8);
             }
 
+            function minutesBetweenUtc8Stamps(sleepStamp, wakeStamp) {
+              const m1 = (sleepStamp || '').match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/);
+              const m2 = (wakeStamp || '').match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/);
+              if (!m1 || !m2) return null;
+
+              const [, Y1, M1, D1, h1, mi1] = m1;
+              const [, Y2, M2, D2, h2, mi2] = m2;
+
+              const t1 = Date.UTC(Number(Y1), Number(M1) - 1, Number(D1), Number(h1) - 8, Number(mi1));
+              const t2 = Date.UTC(Number(Y2), Number(M2) - 1, Number(D2), Number(h2) - 8, Number(mi2));
+              return Math.round((t2 - t1) / 60000);
+            }
+
+            function computeDurationStr(sleepStamp, wakeStamp) {
+              if (!sleepStamp || !wakeStamp) return '';
+              const diffMin = minutesBetweenUtc8Stamps(sleepStamp, wakeStamp);
+              if (diffMin == null || diffMin < 0 || diffMin > 24 * 60) return '';
+              return `${Math.floor(diffMin / 60)}h${pad(diffMin % 60)}m`;
+            }
+
             function parseDurationToMinutes(d) {
-              // "7h05m"
               const m = (d || '').match(/^(\d+)h(\d{2})m$/);
               if (!m) return null;
               return Number(m[1]) * 60 + Number(m[2]);
             }
 
-            function extractTableRows(issueBody) {
-              const startMark = '<!-- SLEEP_LOG_TABLE_START -->';
-              const endMark = '<!-- SLEEP_LOG_TABLE_END -->';
-              if (!issueBody || !issueBody.includes(startMark) || !issueBody.includes(endMark)) return [];
+            function parseEventFromCommentBody(body) {
+              if (!body) return null;
+              const start = body.indexOf(EVENT_PREFIX);
+              if (start < 0) return null;
 
-              const startIdx = issueBody.indexOf(startMark);
-              const endIdx = issueBody.indexOf(endMark);
-              const middle = issueBody.slice(startIdx + startMark.length, endIdx);
+              const jsonStart = start + EVENT_PREFIX.length;
+              const end = body.indexOf(EVENT_SUFFIX, jsonStart);
+              if (end < 0) return null;
 
-              const lines = middle.split('\n').map(l => l.trim()).filter(Boolean);
-              const headerIdx = lines.findIndex(l => l.startsWith('| Date |'));
-              if (headerIdx < 0) return [];
-              const table = lines.slice(headerIdx);
+              const jsonText = body.slice(jsonStart, end).trim();
+              try {
+                const evt = JSON.parse(jsonText);
+                if (!evt || typeof evt !== 'object') return null;
+                if (evt.cmd !== 'sleep' && evt.cmd !== 'wake') return null;
+                if (!evt.stamp || !evt.dateKey) return null;
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(evt.dateKey)) return null;
+                if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(evt.stamp)) return null;
+                evt.source = evt.source || 'live';
+                return evt;
+              } catch {
+                return null;
+              }
+            }
 
-              const rows = table.slice(2);
-              const parsed = [];
-              for (const r of rows) {
-                if (!r.startsWith('|')) continue;
-                const cols = r.split('|').map(s => s.trim()).filter(Boolean);
-                // [Date, Sleep, Wake, Duration, Source]
-                if (cols.length < 5) continue;
-                parsed.push({
-                  date: cols[0],
-                  sleep: cols[1],
-                  wake: cols[2],
-                  duration: cols[3],
-                  source: cols[4],
+            async function listAllComments(owner, repo, issue_number) {
+              return await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number,
+                per_page: 100,
+              });
+            }
+
+            function buildRowsFromEvents(events) {
+              // Map<dateKey, {sleep,wake,source}>
+              const map = new Map();
+
+              for (const evt of events) {
+                const e = map.get(evt.dateKey) || { sleep: '', wake: '', source: '' };
+
+                // keep latest stamp for each field
+                if (evt.cmd === 'sleep') {
+                  if (!e.sleep || evt.stamp >= e.sleep) e.sleep = evt.stamp;
+                } else {
+                  if (!e.wake || evt.stamp >= e.wake) e.wake = evt.stamp;
+                }
+
+                if (e.source !== 'backfill') e.source = evt.source || 'live';
+
+                map.set(evt.dateKey, e);
+              }
+
+              // Convert to rows array
+              const rows = [];
+              for (const [dateKey, e] of map.entries()) {
+                rows.push({
+                  date: dateKey,
+                  sleep: e.sleep,
+                  wake: e.wake,
+                  duration: computeDurationStr(e.sleep, e.wake),
+                  source: e.source || '',
                 });
               }
-              return parsed;
+
+              // sort desc by date
+              rows.sort((a, b) => (a.date < b.date ? 1 : -1));
+              return rows;
             }
 
             const nowUtc8 = toUtc8Date(new Date().toISOString());
@@ -103,20 +166,32 @@ jobs:
               per_page: 100,
             });
 
-            const people = issues.map(is => {
+            const people = [];
+            for (const is of issues) {
               const author = is.user?.login || 'unknown';
-              return {
+
+              const comments = await listAllComments(context.repo.owner, context.repo.repo, is.number);
+              const events = [];
+              for (const c of comments) {
+                if (c.user?.login !== TRUSTED_EVENT_AUTHOR) continue;
+                const evt = parseEventFromCommentBody(c.body || '');
+                if (evt) events.push(evt);
+              }
+
+              people.push({
                 author,
                 issue_number: is.number,
                 issue_title: is.title,
                 issue_url: is.html_url,
-                rows: extractTableRows(is.body || ''),
-              };
-            }).sort((a, b) => a.author.localeCompare(b.author));
+                rows: buildRowsFromEvents(events),
+              });
+            }
+
+            people.sort((a, b) => a.author.localeCompare(b.author));
 
             // Today table (by dateKey)
-            const todayRecords = people.map(p => {
-              const row = p.rows.find(r => r.date === todayKey) || { sleep: '', wake: '', duration: '', source: '' };
+            const todayRecords = people.map((p) => {
+              const row = p.rows.find((r) => r.date === todayKey) || { sleep: '', wake: '', duration: '', source: '' };
               return {
                 user: p.author,
                 sleep: row.sleep || '',
@@ -128,7 +203,7 @@ jobs:
             });
 
             // 7-day averages
-            const averages = people.map(p => {
+            const averages = people.map((p) => {
               const mins = [];
               for (const r of p.rows) {
                 if (!r.date || !minKey) continue;
@@ -151,6 +226,7 @@ jobs:
             lines.push('');
             lines.push(`Updated: ${new Date().toISOString()}`);
             lines.push('');
+            lines.push(`- Data source: trusted event comments from **${TRUSTED_EVENT_AUTHOR}** (anti-tamper).`);
             lines.push(`- "Today" uses the table's **Date (sleep dateKey)**.`);
             lines.push(`- "Avg" is computed from rows with a valid \`Duration\` in the last ${DAYS_AVG} days (${minKey} ~ ${todayKey}).`);
             lines.push('');
