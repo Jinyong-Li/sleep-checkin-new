@@ -173,7 +173,6 @@
           <div id="issueLink"></div>
         </div>
 
-        <!-- shown only when user has no open issue -->
         <div id="noIssueActions" style="display: none; margin-top: 10px">
           <button id="createIssueBtn" class="secondary">Create Issue</button>
           <div class="muted" style="margin-top: 8px">
@@ -181,7 +180,6 @@
           </div>
         </div>
 
-        <!-- shown only when user has an open issue -->
         <div id="hasIssueActions" style="display: none; margin-top: 10px">
           <button data-cmd="/sleep">Sleep</button>
           <button data-cmd="/wake">Wake</button>
@@ -260,13 +258,12 @@
         $("authState").textContent = text;
       }
 
-      // ---- time helpers (Beijing, ASCII-only to avoid unreadable glyphs) ----
       function pad2(n) {
         return String(n).padStart(2, "0");
       }
 
       function beijingNowYmdHm() {
-        const now = new Date(Date.now() + 8 * 60 * 60 * 1000); // shift to UTC+8
+        const now = new Date(Date.now() + 8 * 60 * 60 * 1000);
         const y = now.getUTCFullYear();
         const m = pad2(now.getUTCMonth() + 1);
         const d = pad2(now.getUTCDate());
@@ -324,7 +321,6 @@
         if (!sid) {
           setAuthState("Not logged in");
           $("issueCard").style.display = "none";
-          set indicated = false;
           setHasIssueUI(false);
           return;
         }
@@ -385,7 +381,6 @@
           body: JSON.stringify({ number: issue.number, body: cmd }),
         });
 
-        // wait for bot to update a bit, then refresh
         await sleep(1200);
         await refreshIssueViews(issue.number);
       }
@@ -412,7 +407,6 @@
 
           setHasIssueUI(true);
 
-          // Wait a bit for /rebuild to be processed, then refresh a couple of times.
           await sleep(1200);
           await refreshIssueViews(created.number);
           await sleep(1200);
