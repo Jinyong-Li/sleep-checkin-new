@@ -20,6 +20,7 @@ assignees: ''
 > 创建后在评论区发送 `/sleep` 或 `/rebuild` 会自动启用 sleep-log（机器人会自动加 `sleep-log` 标签）。
 > 请不要手动给 issue 添加 `sleep-log` 标签（避免绕过“每人仅一个 open issue”的限制，导致记录分散）。
 
+> 表格默认展示最近 **30 天**；展开可查看全历史。
 > 注意：表格是“展示层”，请不要手动编辑表格内容。
 > 任何手动修改都会在下一次命令触发或 `/rebuild` 时被覆盖（以机器人事件日志为准）。
 
@@ -28,9 +29,6 @@ assignees: ''
 <!-- SLEEP_LOG_ENABLED -->
 
 <!-- SLEEP_LOG_TABLE_START -->
-
-| Date | Sleep (UTC+8) | Wake (UTC+8) | Duration | Source |
-|---|---|---|---|---|
 
 <!-- SLEEP_LOG_TABLE_END -->
 
