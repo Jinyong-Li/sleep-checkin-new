@@ -197,8 +197,6 @@ jobs:
               // Supported:
               // /sleep
               // /wake
-              // /sleep HH:MM
-              // /wake HH:MM
               // /sleep YYYY-MM-DD HH:MM backfill
               // /wake  YYYY-MM-DD HH:MM backfill
               const parts = (text || '').trim().split(/\s+/).filter(Boolean);
@@ -210,6 +208,7 @@ jobs:
               let isBackfill = false;
 
               if (parts.length === 2) {
+                // Disallow "/sleep HH:MM" and "/wake HH:MM"
                 if (/^\d{2}:\d{2}$/.test(parts[1])) {
                   explicitTime = parts[1];
                 }
@@ -254,21 +253,24 @@ jobs:
             const issueRes = await github.rest.issues.get({ owner, repo, issue_number });
             const issue = issueRes.data;
 
+            const commenter = context.payload.comment.user.login;
+            const issueAuthor = issue.user?.login;
+
+            // Only allow issue author
+            if (!issueAuthor || commenter !== issueAuthor) return;
+
             // Must have required label (or auto-add it)
             let labels = (issue.labels || [])
               .map((l) => (typeof l === 'string' ? l : l.name))
               .filter(Boolean);
-            
+
             if (!labels.includes(REQUIRED_LABEL)) {
               // Check if issue body has the enable marker
               const issueBody = issue.body || '';
               const hasMarker = issueBody.includes('<!-- SLEEP_LOG_ENABLED -->');
-            
+
               // Only allow issue author to auto-enable
-              const commenter = context.payload.comment.user.login;
-              const issueAuthor = issue.user?. login;
-            
-              if (hasMarker && issueAuthor && commenter === issueAuthor) {
+              if (hasMarker) {
                 // Auto-add label
                 await github.rest.issues.addLabels({
                   owner,
@@ -277,20 +279,13 @@ jobs:
                   labels: [REQUIRED_LABEL],
                 });
                 labels.push(REQUIRED_LABEL); // update local array
-                
-                await comment(owner, repo, issue_number, 
-                  `@${commenter} ✅ 已自动启用 sleep-log 功能。`
-                );
+
+                await comment(owner, repo, issue_number, `@${commenter} ✅ 已自动启用 sleep-log 功能。`);
               } else {
                 // Not enabled, ignore
                 return;
               }
             }
-
-            // Only allow issue author
-            const commenter = context.payload.comment.user.login;
-            const issueAuthor = issue.user?.login;
-            if (!issueAuthor || commenter !== issueAuthor) return;
 
             // Event time (UTC+8)
             const eventUtc8 = toUtc8Date(context.payload.comment.created_at);
@@ -328,16 +323,17 @@ jobs:
                 targetStamp = eventStamp; // KEEP REAL DATE (important!)
               }
             } else if (parsed.explicitTime && !parsed.explicitDate) {
-              // /sleep HH:MM or /wake HH:MM (no date)
-              if (parsed.cmd === '/sleep') {
-                appliedDateKey = dateKeyForSleepEvent(eventUtc8);
-                targetStamp = `${appliedDateKey} ${parsed.explicitTime}`; // dateKey is the "sleep night" date
-              } else {
-                // /wake HH:MM: prefer incomplete row, but date part should be "real wake day"
-                appliedDateKey = findLatestIncompleteDateKey() || eventDateKey;
-                const wakeRealDay = eventDateKey;
-                targetStamp = `${wakeRealDay} ${parsed.explicitTime}`;
-              }
+              // Disallow "/sleep HH:MM" and "/wake HH:MM"
+              await comment(
+                owner,
+                repo,
+                issue_number,
+                `@${commenter} ⚠️ 不支持 \`${parsed.cmd} HH:MM\` 格式。\n` +
+                  `���使用：\n` +
+                  `- \`${parsed.cmd}\` 记录当前时间\n` +
+                  `- \`${parsed.cmd} YYYY-MM-DD HH:MM backfill\` 补记/修正（仅允许最近 ${BACKFILL_MAX_DAYS} 天）`
+              );
+              return;
             } else if (parsed.explicitDate && parsed.explicitTime) {
               // /sleep YYYY-MM-DD HH:MM backfill
               // /wake  YYYY-MM-DD HH:MM backfill
