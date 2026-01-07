@@ -12,8 +12,12 @@ assignees: ''
 
 - `/sleep` - 记录当前时间为入睡时间
 - `/wake` - 记录当前时间为起床时间
-- `/sleep YYYY-MM-DD HH:MM backfill` - 补记历史（仅最近7天，且只能改更晚）
-- `/wake YYYY-MM-DD HH:MM backfill` - 补记历史（仅最近7天，且只能改更晚）
+- `/sleep YYYY-MM-DD HH:MM backfill` - 补记/修正（仅最近7天，且只能改更晚）
+- `/wake YYYY-MM-DD HH:MM backfill` - 补记/修正（仅最近7天，且只能改更晚）
+- `/rebuild` - 从事件日志重建表格（当你手动改坏表格或怀疑显示不对时使用）
+
+> 注意：表格是“展示层”，请不要手动编辑表格内容。
+> 任何手动修改都会在下一次命令触发或 `/rebuild` 时被覆盖（以机器人事件日志为准）。
 
 ---
 
