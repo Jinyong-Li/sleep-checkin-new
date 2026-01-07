@@ -29,7 +29,6 @@ jobs:
             const REQUIRED_LABEL = 'sleep-log';
             const DAYS_AVG = 7;
 
-            // Trust only bot event logs
             const TRUSTED_EVENT_AUTHOR = 'github-actions[bot]';
             const EVENT_PREFIX = '<!--SLEEP_LOG_EVENT ';
             const EVENT_SUFFIX = '-->';
@@ -97,7 +96,15 @@ jobs:
               try {
                 const evt = JSON.parse(jsonText);
                 if (!evt || typeof evt !== 'object') return null;
-                if (evt.cmd !== 'sleep' && evt.cmd !== 'wake') return null;
+                if (evt.cmd !== 'sleep' && evt.cmd !== 'wake' && evt.cmd !== 'undo') return null;
+                if (typeof evt.id !== 'number') return null;
+
+                if (evt.cmd === 'undo') {
+                  if (typeof evt.revokes !== 'number') return null;
+                  evt.source = evt.source || 'live';
+                  return evt;
+                }
+
                 if (!evt.stamp || !evt.dateKey) return null;
                 if (!/^\d{4}-\d{2}-\d{2}$/.test(evt.dateKey)) return null;
                 if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(evt.stamp)) return null;
@@ -118,13 +125,20 @@ jobs:
             }
 
             function buildRowsFromEvents(events) {
+              const revoked = new Set();
+              for (const evt of events) {
+                if (evt.cmd === 'undo') revoked.add(evt.revokes);
+              }
+
               // Map<dateKey, {sleep,wake,source}>
               const map = new Map();
 
               for (const evt of events) {
+                if (evt.cmd === 'undo') continue;
+                if (revoked.has(evt.id)) continue;
+
                 const e = map.get(evt.dateKey) || { sleep: '', wake: '', source: '' };
 
-                // keep latest stamp for each field
                 if (evt.cmd === 'sleep') {
                   if (!e.sleep || evt.stamp >= e.sleep) e.sleep = evt.stamp;
                 } else {
@@ -136,7 +150,6 @@ jobs:
                 map.set(evt.dateKey, e);
               }
 
-              // Convert to rows array
               const rows = [];
               for (const [dateKey, e] of map.entries()) {
                 rows.push({
@@ -148,7 +161,6 @@ jobs:
                 });
               }
 
-              // sort desc by date
               rows.sort((a, b) => (a.date < b.date ? 1 : -1));
               return rows;
             }
@@ -157,7 +169,6 @@ jobs:
             const todayKey = fmtUtc8DateKey(nowUtc8);
             const minKey = addDaysToUtc8DateKey(todayKey, -(DAYS_AVG - 1));
 
-            // Pull all open issues with label sleep-log
             const issues = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -175,7 +186,10 @@ jobs:
               for (const c of comments) {
                 if (c.user?.login !== TRUSTED_EVENT_AUTHOR) continue;
                 const evt = parseEventFromCommentBody(c.body || '');
-                if (evt) events.push(evt);
+                if (!evt) continue;
+                // defense-in-depth: ensure id matches comment id
+                if (evt.id !== c.id) continue;
+                events.push(evt);
               }
 
               people.push({
@@ -189,7 +203,6 @@ jobs:
 
             people.sort((a, b) => a.author.localeCompare(b.author));
 
-            // Today table (by dateKey)
             const todayRecords = people.map((p) => {
               const row = p.rows.find((r) => r.date === todayKey) || { sleep: '', wake: '', duration: '', source: '' };
               return {
@@ -202,7 +215,6 @@ jobs:
               };
             });
 
-            // 7-day averages
             const averages = people.map((p) => {
               const mins = [];
               for (const r of p.rows) {
@@ -227,6 +239,7 @@ jobs:
             lines.push(`Updated: ${new Date().toISOString()}`);
             lines.push('');
             lines.push(`- Data source: trusted event comments from **${TRUSTED_EVENT_AUTHOR}** (anti-tamper).`);
+            lines.push(`- Supports \`/undo\`: revoked events are excluded from tables/averages.`);
             lines.push(`- "Today" uses the table's **Date (sleep dateKey)**.`);
             lines.push(`- "Avg" is computed from rows with a valid \`Duration\` in the last ${DAYS_AVG} days (${minKey} ~ ${todayKey}).`);
             lines.push('');
