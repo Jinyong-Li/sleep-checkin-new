@@ -479,7 +479,7 @@ jobs:
               const extra = evt.source === 'backfill' ? ' (backfill)' : '';
               return (
                 `Recorded **${action}**${extra}: **${evt.stamp} (UTC+8)**\n` +
-                `${EVENT_PREFIX}${JSON.stringify(evt)} ${EVENT_SUFFIX}`
+                  `${EVENT_PREFIX}${JSON.stringify(evt)} ${EVENT_SUFFIX}`
               );
             }
 
@@ -983,22 +983,40 @@ jobs:
                 return;
               }
 
-              appliedDateKey = parsed.explicitDate;
-              targetStamp = `${parsed.explicitDate} ${parsed.explicitTime}`;
-              source = 'backfill';
+              // BACKFILL: interpret the given YYYY-MM-DD as the *natural date* of the event,
+              // then apply cutoff rule (04:00) to decide the *dateKey* for /sleep.
+              const naturalDateKey = parsed.explicitDate;
 
+              // Backfill window check should use the *natural date* (what user typed),
+              // so that "/sleep 2026-01-08 01:20 backfill" is considered within the last N days.
               const todayKey = eventDateKey;
               const minAllowed = addDaysToUtc8DateKey(todayKey, -BACKFILL_MAX_DAYS);
 
-              if (minAllowed && (appliedDateKey < minAllowed || appliedDateKey > todayKey)) {
+              if (minAllowed && (naturalDateKey < minAllowed || naturalDateKey > todayKey)) {
                 await createComment(
                   owner,
                   repo,
                   issue_number,
                   `⚠️ Backfill 仅允许最近 **${BACKFILL_MAX_DAYS}** 天（**${minAllowed}** ~ **${todayKey}**）。\n` +
-                    `你尝试修改的日期：**${appliedDateKey}**`
+                    `你尝试修改的日期：**${naturalDateKey}**`
                 );
                 return;
+              }
+
+              targetStamp = `${parsed.explicitDate} ${parsed.explicitTime}`;
+              source = 'backfill';
+
+              // Decide appliedDateKey with cutoff for /sleep only
+              appliedDateKey = naturalDateKey;
+              if (parsed.cmd === '/sleep') {
+                const t = parseHHMMFromStamp(targetStamp);
+                if (t) {
+                  const minutes = t.hh * 60 + t.mm;
+                  const cutoffMin = CUTOFF_HOUR * 60; // 04:00
+                  if (minutes < cutoffMin) {
+                    appliedDateKey = addDaysToUtc8DateKey(naturalDateKey, -1) || naturalDateKey;
+                  }
+                }
               }
 
               if (targetStamp > eventStamp) {
