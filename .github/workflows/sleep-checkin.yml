@@ -52,6 +52,15 @@ jobs:
 
             const ENFORCE_SINGLE_OPEN_ISSUE_PER_USER = true;
 
+            // Strict local-time window enforcement (UTC+8)
+            // - Wake allowed: 04:00 .. 20:00 (inclusive)
+            // - Sleep allowed: 20:00 .. 04:00 (cross-midnight; 04:00 excluded, because 04:00 belongs to wake window)
+            const STRICT_TIME_WINDOW = true;
+            const WAKE_START_HHMM = '04:00';
+            const WAKE_END_HHMM = '20:00';
+            const SLEEP_START_HHMM = '20:00';
+            const SLEEP_END_HHMM = '04:00';
+
             // ----------------------------
             // Helpers: date/time
             // ----------------------------
@@ -109,6 +118,81 @@ jobs:
               const todayKey = fmtUtc8DateKey(utc8DateObj);
               if (hour < CUTOFF_HOUR) return addDaysToUtc8DateKey(todayKey, -1);
               return todayKey;
+            }
+
+            function parseHHMMFromStamp(stamp) {
+              // stamp: YYYY-MM-DD HH:MM
+              const m = String(stamp || '').match(/^\d{4}-\d{2}-\d{2} (\d{2}):(\d{2})$/);
+              if (!m) return null;
+              const hh = Number(m[1]);
+              const mm = Number(m[2]);
+              if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+              if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+              return { hh, mm };
+            }
+
+            function hhmmToMinutes(hhmm) {
+              const m = String(hhmm || '').match(/^(\d{2}):(\d{2})$/);
+              if (!m) return null;
+              const hh = Number(m[1]);
+              const mm = Number(m[2]);
+              if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+              if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+              return hh * 60 + mm;
+            }
+
+            function isWithinWindowNonCross(min, startMin, endMinInclusive) {
+              // [start, end] inclusive, no cross-midnight
+              return min >= startMin && min <= endMinInclusive;
+            }
+
+            function isWithinWindowCross(min, startMin, endMinExclusive) {
+              // cross-midnight window: [start, 24h) U [0, end)
+              // end is exclusive to allow "04:00 belongs to wake".
+              return min >= startMin || min < endMinExclusive;
+            }
+
+            function validateStrictTimeWindow(cmdWithSlash, stamp) {
+              if (!STRICT_TIME_WINDOW) return { ok: true };
+
+              const t = parseHHMMFromStamp(stamp);
+              if (!t) return { ok: true }; // if stamp format unexpected, do not hard fail here (other validation already exists)
+              const min = t.hh * 60 + t.mm;
+
+              const wakeStart = hhmmToMinutes(WAKE_START_HHMM);
+              const wakeEnd = hhmmToMinutes(WAKE_END_HHMM);
+              const sleepStart = hhmmToMinutes(SLEEP_START_HHMM);
+              const sleepEnd = hhmmToMinutes(SLEEP_END_HHMM);
+
+              if (wakeStart == null || wakeEnd == null || sleepStart == null || sleepEnd == null) return { ok: true };
+
+              if (cmdWithSlash === '/wake') {
+                const ok = isWithinWindowNonCross(min, wakeStart, wakeEnd);
+                if (!ok) {
+                  return {
+                    ok: false,
+                    message:
+                      `⚠️ Wake 时间不在允许范围（北京时间 ${WAKE_START_HHMM}–${WAKE_END_HHMM}），本次命令已忽略。\n` +
+                      `你输入：**${stamp}**`,
+                  };
+                }
+                return { ok: true };
+              }
+
+              if (cmdWithSlash === '/sleep') {
+                const ok = isWithinWindowCross(min, sleepStart, sleepEnd);
+                if (!ok) {
+                  return {
+                    ok: false,
+                    message:
+                      `⚠️ Sleep 时间不在允许范围（北京时间 ${SLEEP_START_HHMM}–次日 ${SLEEP_END_HHMM}），本次命令已忽略。\n` +
+                      `你输入：**${stamp}**`,
+                  };
+                }
+                return { ok: true };
+              }
+
+              return { ok: true };
             }
 
             // ----------------------------
@@ -241,14 +325,12 @@ jobs:
 
               const start = (body || '').indexOf(STATE_PREFIX);
               if (start < 0) {
-                // append at end
                 return `${body || ''}\n\n${marker}\n`;
               }
 
               const jsonStart = start + STATE_PREFIX.length;
               const end = (body || '').indexOf(STATE_SUFFIX, jsonStart);
               if (end < 0) {
-                // broken marker: remove everything after prefix and append fresh marker
                 return `${(body || '').slice(0, start).trimEnd()}\n\n${marker}\n`;
               }
 
@@ -264,13 +346,6 @@ jobs:
             // Helpers: commands & events
             // ----------------------------
             function parseCommand(text) {
-              // /sleep
-              // /wake
-              // /sleep YYYY-MM-DD HH:MM backfill
-              // /wake  YYYY-MM-DD HH:MM backfill
-              // /rebuild
-              // /undo
-              // /archive
               const parts = (text || '').trim().split(/\s+/).filter(Boolean);
               const cmd = (parts[0] || '').toLowerCase();
 
@@ -285,7 +360,6 @@ jobs:
               let isBackfill = false;
 
               if (parts.length === 2) {
-                // Disallow "/sleep HH:MM" and "/wake HH:MM" (no date)
                 if (/^\d{2}:\d{2}$/.test(parts[1])) {
                   explicitTime = parts[1];
                 }
@@ -335,7 +409,7 @@ jobs:
 
             async function createComment(owner, repo, issue_number, body) {
               const res = await github.rest.issues.createComment({ owner, repo, issue_number, body });
-              return res.data; // includes id, created_at
+              return res.data;
             }
 
             async function updateComment(owner, repo, comment_id, body) {
@@ -384,7 +458,7 @@ jobs:
                 if (c.user?.login !== TRUSTED_EVENT_AUTHOR) continue;
                 const evt = parseEventFromCommentBody(c.body || '');
                 if (!evt) continue;
-                if (evt.id !== c.id) continue; // defense-in-depth
+                if (evt.id !== c.id) continue;
                 evt._comment_created_at = c.created_at;
                 events.push(evt);
               }
@@ -479,6 +553,7 @@ jobs:
             const commenter = context.payload.comment.user.login;
             const issueAuthor = issue.user?.login;
 
+            // Only issue author can operate
             if (!issueAuthor || commenter !== issueAuthor) return;
 
             // Title normalize (for active log)
@@ -501,7 +576,7 @@ jobs:
                 owner,
                 repo,
                 issue_number,
-                `@${commenter} ⚠️ 为了避免记录分散，你只能拥有 **一个** 处于 open 状态的 sleep-log issue。\n` +
+                `⚠️ 为了避免记录分散，你只能拥有 **一个** 处于 open 状态的 sleep-log issue。\n` +
                   `请到这个 issue 继续记录：${otherUrl}\n\n` +
                   `接下来你可以：\n` +
                   `1) 关闭当前这个 issue；\n` +
@@ -523,7 +598,7 @@ jobs:
               await github.rest.issues.addLabels({ owner, repo, issue_number, labels: [REQUIRED_LABEL] });
               labels.push(REQUIRED_LABEL);
 
-              await createComment(owner, repo, issue_number, `@${commenter} ✅ 已自动启用 sleep-log 功能。`);
+              await createComment(owner, repo, issue_number, `✅ 已自动启用 sleep-log 功能。`);
             }
 
             // Always enforce for every command
@@ -553,7 +628,6 @@ jobs:
               const ensured2 = ensureTableBlock(latest2.data.body || '');
               const { before, after } = extractTable(ensured2.body, ensured2.startMark, ensured2.endMark);
 
-              // If map empty: keep existing table (do not overwrite) but ensure blocks+state exist
               if (mapToWrite.size === 0) {
                 let bodyKeep = ensured2.body;
                 const st = { cursor: cursorToWrite || 0, rows: {} };
@@ -568,7 +642,7 @@ jobs:
                     owner,
                     repo,
                     issue_number,
-                    `@${commenter} ℹ️ 当前未检测到可信事件日志（SLEEP_LOG_EVENT），已保持现有表格不变。\n` +
+                    `ℹ️ 当前未检测到可信事件日志（SLEEP_LOG_EVENT），已保持现有表格不变。\n` +
                       `当首次成功记录后，表格将以事件日志为准自动重建（也可用 \`/rebuild\`）。`
                   );
                 }
@@ -578,7 +652,6 @@ jobs:
               const middle = buildTableMiddle(mapToWrite, eventDateKey);
               let finalBody = before + middle + after;
 
-              // write state
               const stateObj = { cursor: cursorToWrite || 0, rows: buildMapToRowsObject(mapToWrite) };
               finalBody = upsertStateIntoBody(finalBody, stateObj);
 
@@ -593,7 +666,6 @@ jobs:
 
               await writeBodyWithTableAndState(map, cursor, commentOnNoEvents && map.size === 0);
 
-              // archive hint (only once)
               if (!ensured.body.includes(ARCHIVE_HINT_MARKER) && events.length >= ARCHIVE_SUGGEST_THRESHOLD) {
                 const body3 = upsertArchiveHintMarker((await github.rest.issues.get({ owner, repo, issue_number })).data.body || '');
                 await github.rest.issues.update({ owner, repo, issue_number, body: body3 });
@@ -601,15 +673,14 @@ jobs:
                   owner,
                   repo,
                   issue_number,
-                  `@${commenter} ℹ️ 该日志的可信事件评论数已达到 **${events.length}**（>= ${ARCHIVE_SUGGEST_THRESHOLD}）。\n` +
-                    `如果你想让 issue 更“轻”，可以使用 \`/archive\` 自动封存并关闭此 issue，然后新建一个新的 Sleep Log issue 继续记录。`
+                  `ℹ️ 该日志的可信事件评论数已达到 **${events.length}**（>= ${ARCHIVE_SUGGEST_THRESHOLD}）。\n` +
+                    `如果你想让 issue ��“轻”，可以使用 \`/archive\` 自动封存并关闭此 issue，然后新建一个新的 Sleep Log issue 继续记录。`
                 );
               }
 
               return { map, cursor, trustedEventsCount: events.length, events };
             }
 
-            // Init map/cursor either from state (fast) or full rebuild (slow)
             let fullEvents = null;
             let trustedEventsCount = 0;
 
@@ -619,7 +690,7 @@ jobs:
               fullEvents = r.events;
 
               if (parsed.cmd === '/rebuild') {
-                await createComment(owner, repo, issue_number, `@${commenter} ✅ 已从事件日志重建表格。`);
+                await createComment(owner, repo, issue_number, `✅ 已从事件日志重建表格。`);
                 return;
               }
             } else {
@@ -627,12 +698,9 @@ jobs:
               map = buildRowsObjectToMap(state.rows);
             }
 
-            // /archive handler (requires sleep-log enabled, and we already did full rebuild in this branch)
             if (parsed.cmd === '/archive') {
-              // Must be enabled (label already ensured above); still do a sanity check:
               if (!labels.includes(REQUIRED_LABEL)) return;
 
-              // If no events/rows, archive without range
               const range = getDateRangeFromMap(map);
               const rangeText = range ? `(${range.start} ~ ${range.end}) ` : '';
               const newTitle = `${TITLE_PREFIX} @${issueAuthor} ${rangeText}[archived]`;
@@ -643,7 +711,7 @@ jobs:
                 owner,
                 repo,
                 issue_number,
-                `@${commenter} ✅ 已封存该日志并准备关闭。\n` +
+                `✅ 已封存该日志并准备关闭。\n` +
                   `建议：使用模板新建一个新的 Sleep Log issue 继续记录（保持每人只有一个 open）。`
               );
 
@@ -651,7 +719,6 @@ jobs:
               return;
             }
 
-            // /undo handler (always uses full events for correctness)
             if (parsed.cmd === '/undo') {
               const events = fullEvents || (await buildTrustedEventsFull(owner, repo, issue_number));
 
@@ -665,7 +732,7 @@ jobs:
 
               const target = candidates[0];
               if (!target) {
-                await createComment(owner, repo, issue_number, `@${commenter} ⚠️ 没有找到可撤销的记录（sleep/wake）。`);
+                await createComment(owner, repo, issue_number, `⚠️ 没有找到可撤销的记录（sleep/wake）。`);
                 return;
               }
 
@@ -678,7 +745,7 @@ jobs:
                   owner,
                   repo,
                   issue_number,
-                  `@${commenter} ⚠️ 只能撤销最近 **${UNDO_MAX_MINUTES}** 分钟内的记录。\n` +
+                  `⚠️ 只能撤销最近 **${UNDO_MAX_MINUTES}** 分钟内的记录。\n` +
                     `最近一次记录时间：**${targetStampUtc8}**（UTC+8）\n` +
                     `距现在约：**${diffMin}** 分钟`
                 );
@@ -695,12 +762,11 @@ jobs:
                 owner,
                 repo,
                 issue_number,
-                `@${commenter} ✅ 已撤销最近一次记录：**${target.cmd}**（事件 ID: ${target.id}）。`
+                `✅ 已撤销最近一次记录：**${target.cmd}**（事件 ID: ${target.id}）。`
               );
               return;
             }
 
-            // Normal /sleep /wake
             const findLatestIncompleteDateKey = () => {
               const keys = Array.from(map.keys()).sort((a, b) => (a < b ? 1 : -1));
               for (const k of keys) {
@@ -727,7 +793,7 @@ jobs:
                 owner,
                 repo,
                 issue_number,
-                `@${commenter} ⚠️ 不支持 \`${parsed.cmd} HH:MM\` 格式。\n` +
+                `⚠️ 不支持 \`${parsed.cmd} HH:MM\` 格式。\n` +
                   `请使用：\n` +
                   `- \`${parsed.cmd}\` 记录当前时间\n` +
                   `- \`${parsed.cmd} YYYY-MM-DD HH:MM backfill\` 补记/修正（仅允许最近 ${BACKFILL_MAX_DAYS} 天）`
@@ -739,7 +805,7 @@ jobs:
                   owner,
                   repo,
                   issue_number,
-                  `@${commenter} ⚠️ 指定日期和时间修改记录时，必须在命令末尾加上 \`backfill\` 关键字。\n` +
+                  `⚠️ 指定日期和时间修改记录时，必须在命令末尾加上 \`backfill\` 关键字。\n` +
                     `正确格式：\`${parsed.cmd} ${parsed.explicitDate} ${parsed.explicitTime} backfill\``
                 );
                 return;
@@ -757,7 +823,7 @@ jobs:
                   owner,
                   repo,
                   issue_number,
-                  `@${commenter} ⚠️ Backfill 仅允许最近 **${BACKFILL_MAX_DAYS}** 天（**${minAllowed}** ~ **${todayKey}**）。\n` +
+                  `⚠️ Backfill 仅允许最近 **${BACKFILL_MAX_DAYS}** 天（**${minAllowed}** ~ **${todayKey}**）。\n` +
                     `你尝试修改的日期：**${appliedDateKey}**`
                 );
                 return;
@@ -768,7 +834,7 @@ jobs:
                   owner,
                   repo,
                   issue_number,
-                  `@${commenter} ⚠️ Backfill 不能填写未来时间。\n` +
+                  `⚠️ Backfill 不能填写未来时间。\n` +
                     `你输入：**${targetStamp}**\n` +
                     `当前时间：**${eventStamp}**（UTC+8）`
                 );
@@ -778,6 +844,15 @@ jobs:
 
             if (!appliedDateKey || !targetStamp) return;
 
+            // Strict time window enforcement (applies to both live and backfill)
+            {
+              const v = validateStrictTimeWindow(parsed.cmd, targetStamp);
+              if (!v.ok) {
+                await createComment(owner, repo, issue_number, v.message);
+                return;
+              }
+            }
+
             const entry = map.get(appliedDateKey) || { sleep: '', wake: '', duration: '', source: '' };
 
             if (parsed.cmd === '/sleep') {
@@ -786,10 +861,10 @@ jobs:
                   owner,
                   repo,
                   issue_number,
-                  `@${commenter} ${appliedDateKey} 已经记录过 **Sleep**：**${entry.sleep}**。\n` +
+                  `${appliedDateKey} 已经记录过 **Sleep**：**${entry.sleep}**。\n` +
                     `如需修正，请使用：\n` +
                     `\`/sleep ${appliedDateKey} HH:MM backfill\`\n` +
-                    `（仅允许最近 ${BACKFILL_MAX_DAYS} 天，且只能把时间改得更晚；也可用 \`/undo\` 撤销最近一次误操作）`
+                    `（仅允许最近 ${BACKFILL_MAX_DAYS} 天，且只能把时间改得���晚；也可用 \`/undo\` 撤销最近一次误操作）`
                 );
                 return;
               }
@@ -799,7 +874,7 @@ jobs:
                   owner,
                   repo,
                   issue_number,
-                  `@${commenter} ❌ 不能把 **Sleep** 设为 **${targetStamp}**，因为它晚于或等于已记录的 **Wake**（**${entry.wake}**）。`
+                  `❌ 不能把 **Sleep** 设为 **${targetStamp}**，因为它晚于或等于已记录的 **Wake**（**${entry.wake}**）。`
                 );
                 return;
               }
@@ -809,7 +884,7 @@ jobs:
                   owner,
                   repo,
                   issue_number,
-                  `@${commenter} 不允许把 **Sleep** 改得更早。\n当前：**${entry.sleep || '(empty)'}**\n尝试：**${targetStamp}**`
+                  `⚠️ 不允许把 **Sleep** 改得更早。\n当前：**${entry.sleep || '(empty)'}**\n尝试：**${targetStamp}**`
                 );
                 return;
               }
@@ -821,7 +896,7 @@ jobs:
                   owner,
                   repo,
                   issue_number,
-                  `@${commenter} ${appliedDateKey} 已经记录过 **Wake**：**${entry.wake}**。\n` +
+                  `${appliedDateKey} 已经记录过 **Wake**：**${entry.wake}**。\n` +
                     `如需修正，请使用：\n` +
                     `\`/wake ${appliedDateKey} HH:MM backfill\`\n` +
                     `（仅允许最近 ${BACKFILL_MAX_DAYS} 天，且只能把时间改得更晚；也可用 \`/undo\` 撤销最近一次误操作）`
@@ -834,7 +909,7 @@ jobs:
                   owner,
                   repo,
                   issue_number,
-                  `@${commenter} ❌ 不能把 **Wake** 设为 **${targetStamp}**，因为它早于或等于已记录的 **Sleep**（**${entry.sleep}**）。`
+                  `❌ 不能把 **Wake** 设为 **${targetStamp}**，因为它早于或等于已记录的 **Sleep**（**${entry.sleep}**）。`
                 );
                 return;
               }
@@ -844,7 +919,7 @@ jobs:
                   owner,
                   repo,
                   issue_number,
-                  `@${commenter} 不允许把 **Wake** 改得更早。\n当前：**${entry.wake || '(empty)'}**\n尝试：**${targetStamp}**`
+                  `⚠️ 不允许把 **Wake** 改得更早。\n当前：**${entry.wake || '(empty)'}**\n尝试：**${targetStamp}**`
                 );
                 return;
               }
@@ -880,8 +955,7 @@ jobs:
 
             await github.rest.issues.update({ owner, repo, issue_number, body: finalBody });
 
-            // archive hint (only once; count is full rebuild only, but we can do a lightweight check here if marker not present)
+            // archive hint (fast path intentionally does nothing; full rebuild path handles thresholding)
             if (!(finalBody.includes(ARCHIVE_HINT_MARKER)) && cursor >= 1) {
-              // We don't know trusted events count in fast path without scanning.
-              // So we only hint when we already did a full rebuild earlier (marker written), or user can use /archive anytime.
+              // no-op
             }
