@@ -156,7 +156,7 @@ jobs:
               if (!STRICT_TIME_WINDOW) return { ok: true };
 
               const t = parseHHMMFromStamp(stamp);
-              if (!t) return { ok: true }; // if stamp format unexpected, do not hard fail here (other validation already exists)
+              if (!t) return { ok: true };
               const min = t.hh * 60 + t.mm;
 
               const wakeStart = hhmmToMinutes(WAKE_START_HHMM);
@@ -674,7 +674,7 @@ jobs:
                   repo,
                   issue_number,
                   `ℹ️ 该日志的可信事件评论数已达到 **${events.length}**（>= ${ARCHIVE_SUGGEST_THRESHOLD}）。\n` +
-                    `如果你想让 issue ��“轻”，可以使用 \`/archive\` 自动封存并关闭此 issue，然后新建一个新的 Sleep Log issue 继续记录。`
+                    `如果你想让 issue 更“轻”，可以使用 \`/archive\` 自动封存并关闭此 issue，然后新建一个新的 Sleep Log issue 继续记录。`
                 );
               }
 
@@ -785,7 +785,20 @@ jobs:
                 appliedDateKey = dateKeyForSleepEvent(eventUtc8);
                 targetStamp = eventStamp;
               } else {
-                appliedDateKey = findLatestIncompleteDateKey() || eventDateKey;
+                // Scheme A: forbid wake-only (no fallback to eventDateKey)
+                const k = findLatestIncompleteDateKey();
+                if (!k) {
+                  await createComment(
+                    owner,
+                    repo,
+                    issue_number,
+                    `⚠️ 未找到“已记录 Sleep 但尚未记录 Wake”的条目，因此无法记录 Wake。\n` +
+                      `请先发送 \`/sleep\`（记录入睡），然后再发送 \`/wake\`。\n` +
+                      `如果你是补记，请使用：\`/wake YYYY-MM-DD HH:MM backfill\``
+                  );
+                  return;
+                }
+                appliedDateKey = k;
                 targetStamp = eventStamp;
               }
             } else if (parsed.explicitTime && !parsed.explicitDate) {
@@ -864,7 +877,7 @@ jobs:
                   `${appliedDateKey} 已经记录过 **Sleep**：**${entry.sleep}**。\n` +
                     `如需修正，请使用：\n` +
                     `\`/sleep ${appliedDateKey} HH:MM backfill\`\n` +
-                    `（仅允许最近 ${BACKFILL_MAX_DAYS} 天，且只能把时间改得���晚；也可用 \`/undo\` 撤销最近一次误操作）`
+                    `（仅允许最近 ${BACKFILL_MAX_DAYS} 天，且只能把时间改得更晚；也可用 \`/undo\` 撤销最近一次误操作）`
                 );
                 return;
               }
