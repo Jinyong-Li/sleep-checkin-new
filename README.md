@@ -38,14 +38,14 @@
 ---
 
 <!-- LEADERBOARD_START -->
-## 昨日榜单（2026-01-09）
+## 昨日榜单（2026-01-10）
 > 仅统计 open 的 `sleep-log` issue 用户；只统计完整记录（Sleep/Wake/Duration 都存在）；cutoff=04:00 (UTC+8)。
-- 最早睡：[@Jinyong-Li](https://github.com/Jinyong-Li)（6h27m，sleep 2026-01-10 01:46 / wake 2026-01-10 08:13）
-- 最晚睡：[@Jinyong-Li](https://github.com/Jinyong-Li)（6h27m，sleep 2026-01-10 01:46 / wake 2026-01-10 08:13）
-- 最早起：[@Jinyong-Li](https://github.com/Jinyong-Li)（6h27m，sleep 2026-01-10 01:46 / wake 2026-01-10 08:13）
-- 最晚起：[@Jinyong-Li](https://github.com/Jinyong-Li)（6h27m，sleep 2026-01-10 01:46 / wake 2026-01-10 08:13）
-- 睡得最长：[@Jinyong-Li](https://github.com/Jinyong-Li)（6h27m，sleep 2026-01-10 01:46 / wake 2026-01-10 08:13）
-- 睡得最短：[@Jinyong-Li](https://github.com/Jinyong-Li)（6h27m，sleep 2026-01-10 01:46 / wake 2026-01-10 08:13）
+- 最早睡：[@yrz-bot](https://github.com/yrz-bot)（9h21m，sleep 2026-01-11 00:46 / wake 2026-01-11 10:07）
+- 最晚睡：[@Jinyong-Li](https://github.com/Jinyong-Li)（7h36m，sleep 2026-01-11 02:29 / wake 2026-01-11 10:05）
+- 最早起：[@Jinyong-Li](https://github.com/Jinyong-Li)（7h36m，sleep 2026-01-11 02:29 / wake 2026-01-11 10:05）
+- 最晚起：[@yrz-bot](https://github.com/yrz-bot)（9h21m，sleep 2026-01-11 00:46 / wake 2026-01-11 10:07）
+- 睡得最长：[@yrz-bot](https://github.com/yrz-bot)（9h21m，sleep 2026-01-11 00:46 / wake 2026-01-11 10:07）
+- 睡得最短：[@Jinyong-Li](https://github.com/Jinyong-Li)（7h36m，sleep 2026-01-11 02:29 / wake 2026-01-11 10:05）
 完整榜单见：https://jinyong-li.github.io/sleep-checkin/
 <!-- LEADERBOARD_END -->
 
